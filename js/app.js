@@ -54,7 +54,7 @@
   var restaurantCoords = [];
   var bufferFeet = 0;
   var studyLayer = null;
-  var showRestaurants = false;
+  var showRestaurants = true;
   var restaurantPointLayer = null;
   var restaurantBufferLayer = null;
   var tileSource = null;        // PMTiles instance
@@ -537,6 +537,7 @@
       dataReady = true;
       setTimeout(function () {
         redrawCacheSync();
+        if (showRestaurants) updateRestaurantLayers();
         setLoadProgress(100, "Done");
         hideLoading();
       }, 20);
