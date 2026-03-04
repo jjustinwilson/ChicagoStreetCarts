@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chicago Sidewalk Exclusion Zone Map</title>
+
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <!-- Leaflet Draw -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
+  <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+
+  <!-- PMTiles (static vector tile reader) -->
+  <script src="https://unpkg.com/pmtiles@3/dist/pmtiles.js"></script>
+
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div id="map"></div>
+
+  <!-- Loading overlay -->
+  <div id="loading">
+    <div id="loading-text">Loading sidewalk &amp; restaurant data&hellip;</div>
+    <div id="loading-bar-track">
+      <div id="loading-bar-fill"></div>
+    </div>
+    <div id="loading-detail"></div>
+  </div>
+
+  <!-- Info panel (top-left) -->
+  <div id="info-panel" class="panel">
+    <h1>Chicago Sidewalk Exclusion Zones</h1>
+    <p>
+      Proposed restaurant exclusion zones eliminate sidewalk space available to
+      street vendors. Drag the slider to see how buffer distance affects
+      available vending area.
+    </p>
+  </div>
+
+  <!-- Neighborhood zoom (top-right) -->
+  <div id="neighborhood-panel" class="panel">
+    <label for="neighborhood-select">Zoom to area</label>
+    <select id="neighborhood-select">
+      <option value="">— Choose —</option>
+
+      <optgroup label="Downtown / Near North / Near South">
+        <option value="41.8819,-87.6278,15">The Loop</option>
+        <option value="41.8845,-87.6487,16">West Loop / Fulton Market</option>
+        <option value="41.8920,-87.6310,16">River North</option>
+        <option value="41.8950,-87.6245,16">Magnificent Mile</option>
+        <option value="41.9095,-87.6355,16">Old Town</option>
+        <option value="41.8690,-87.6270,16">South Loop</option>
+        <option value="41.8775,-87.6475,17">Greektown</option>
+        <option value="41.8730,-87.6270,17">Printer&rsquo;s Row</option>
+      </optgroup>
+
+      <optgroup label="North Side">
+        <option value="41.9180,-87.6480,16">Lincoln Park</option>
+        <option value="41.9460,-87.6530,16">Lakeview / Boystown</option>
+        <option value="41.9485,-87.6555,17">Wrigleyville</option>
+        <option value="41.9790,-87.6680,16">Andersonville</option>
+        <option value="41.9655,-87.6540,16">Uptown</option>
+        <option value="41.9835,-87.6600,16">Edgewater</option>
+        <option value="42.0085,-87.6650,16">Rogers Park</option>
+        <option value="41.9690,-87.6890,16">Lincoln Square</option>
+        <option value="41.9560,-87.6790,16">North Center / Ravenswood</option>
+      </optgroup>
+
+      <optgroup label="Northwest Side">
+        <option value="41.9085,-87.6770,16">Wicker Park / Bucktown</option>
+        <option value="41.8990,-87.6780,16">Ukrainian Village</option>
+        <option value="41.9230,-87.6990,16">Logan Square</option>
+        <option value="41.9020,-87.7190,16">Humboldt Park / Paseo Boricua</option>
+        <option value="41.9390,-87.7110,16">Avondale</option>
+        <option value="41.9680,-87.7240,16">Albany Park</option>
+        <option value="41.9540,-87.7330,16">Irving Park</option>
+        <option value="41.9530,-87.7620,16">Six Corners / Portage Park</option>
+        <option value="41.9710,-87.7620,16">Jefferson Park</option>
+        <option value="41.9310,-87.7590,16">Belmont-Cragin</option>
+      </optgroup>
+
+      <optgroup label="West Side">
+        <option value="41.8955,-87.6740,16">West Town</option>
+        <option value="41.8820,-87.7250,16">Garfield Park</option>
+        <option value="41.8930,-87.7650,16">Austin</option>
+      </optgroup>
+
+      <optgroup label="Southwest / South Side">
+        <option value="41.8570,-87.6615,16">Pilsen</option>
+        <option value="41.8515,-87.6320,16">Chinatown</option>
+        <option value="41.8440,-87.7130,16">Little Village</option>
+        <option value="41.8380,-87.6505,16">Bridgeport</option>
+        <option value="41.8310,-87.6730,16">McKinley Park</option>
+        <option value="41.8090,-87.6570,16">Back of the Yards</option>
+        <option value="41.8190,-87.6990,16">Brighton Park</option>
+        <option value="41.7950,-87.7150,16">Gage Park</option>
+        <option value="41.7730,-87.7120,16">Marquette Park</option>
+        <option value="41.8240,-87.6170,16">Bronzeville</option>
+        <option value="41.7990,-87.5920,16">Hyde Park</option>
+        <option value="41.7800,-87.6040,16">Woodlawn</option>
+        <option value="41.7620,-87.5750,16">South Shore</option>
+        <option value="41.7420,-87.6100,16">Chatham</option>
+        <option value="41.7220,-87.6750,16">Beverly</option>
+        <option value="41.6935,-87.6090,16">Pullman</option>
+      </optgroup>
+
+      <optgroup label="Ethnic / Cultural Corridors">
+        <option value="41.9975,-87.6690,17">Devon Avenue</option>
+        <option value="41.9715,-87.6580,17">Argyle St / Little Saigon</option>
+        <option value="41.8695,-87.6580,17">Taylor St / Little Italy</option>
+        <option value="41.8490,-87.6850,17">Heart of Italy</option>
+        <option value="41.9035,-87.6760,17">Polish Triangle</option>
+        <option value="41.9660,-87.7180,17">Korean Town</option>
+        <option value="41.8450,-87.7120,17">Little Village Arch</option>
+      </optgroup>
+    </select>
+  </div>
+
+  <!-- Slider (bottom-center) -->
+  <div id="slider-panel" class="panel">
+    <div id="slider-label">
+      Exclusion Buffer: <span id="slider-value">0</span> ft
+    </div>
+    <input type="range" id="buffer-slider" min="0" max="1000" step="10" value="0" />
+    <div id="slider-range-labels">
+      <span>0 ft</span><span>500 ft</span><span>1,000 ft</span>
+    </div>
+  </div>
+
+  <!-- Stats / drawing panel (right) -->
+  <div id="stats-panel" class="panel">
+    <h2>Study Area Analysis</h2>
+    <p class="hint">Draw a rectangle or polygon on the map to analyse a specific area.</p>
+    <div id="draw-buttons">
+      <button id="btn-rect" title="Draw rectangle">&#9645; Rectangle</button>
+      <button id="btn-poly" title="Draw polygon">&#9998; Polygon</button>
+      <button id="btn-clear" title="Clear study area" disabled>&#10005; Clear</button>
+    </div>
+    <div id="stats-body" class="hidden">
+      <div class="stat-row">
+        <span class="stat-label">Sidewalk eliminated</span>
+        <span id="stat-pct" class="stat-value">0%</span>
+      </div>
+      <div id="stat-bar-wrap">
+        <div id="stat-bar-remaining"></div>
+        <div id="stat-bar-lost"></div>
+      </div>
+      <div class="stat-caption">
+        <span class="swatch available"></span> Available
+        <span class="swatch eliminated"></span> Eliminated
+      </div>
+    </div>
+  </div>
+
+  <!-- Legend (bottom-left) -->
+  <div id="legend-panel" class="panel">
+    <div class="legend-row">
+      <span class="swatch available"></span> Sidewalk available for vending
+    </div>
+    <label class="legend-toggle" for="show-restaurants">
+      <input type="checkbox" id="show-restaurants" />
+      Show restaurants &amp; buffers
+    </label>
+  </div>
+
+  <script src="js/app.js"></script>
+</body>
+</html>

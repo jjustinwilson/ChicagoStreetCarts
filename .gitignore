@@ -1,0 +1,26 @@
+# Raw shapefiles (too large for GitHub)
+*.shp
+*.shx
+*.dbf
+*.prj
+*.sbn
+*.sbx
+*.cpg
+*.qmd
+
+# Old monolithic data file (replaced by sidewalks.pmtiles)
+data/sidewalks.json
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+*.swp
+*.swo
