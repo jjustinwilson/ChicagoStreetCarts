@@ -417,28 +417,63 @@
     if (loadDetail) loadDetail.textContent = msg || "";
   }
 
+  function fetchWithProgress(url, onProgress) {
+    return fetch(url).then(function (response) {
+      var total = parseInt(response.headers.get("content-length"), 10) || 0;
+      if (!total || !response.body) {
+        return response.clone().arrayBuffer().then(function (buf) {
+          onProgress(1);
+          return { response: response, buffer: buf };
+        });
+      }
+      var loaded = 0;
+      var reader = response.body.getReader();
+      var chunks = [];
+      function read() {
+        return reader.read().then(function (result) {
+          if (result.done) {
+            onProgress(1);
+            var combined = new Uint8Array(loaded);
+            var offset = 0;
+            for (var i = 0; i < chunks.length; i++) {
+              combined.set(chunks[i], offset);
+              offset += chunks[i].length;
+            }
+            return { buffer: combined.buffer };
+          }
+          loaded += result.value.length;
+          chunks.push(result.value);
+          onProgress(total ? loaded / total : 0);
+          return read();
+        });
+      }
+      return read();
+    });
+  }
+
   function loadData() {
-    setLoadProgress(0, "Initialising tile source\u2026");
+    setLoadProgress(0, "Initialising\u2026");
 
     tileSource = new pmtiles.PMTiles("data/sidewalks.pmtiles");
 
-    setLoadProgress(10, "Downloading restaurant data\u2026");
+    setLoadProgress(5, "Downloading restaurant data\u2026");
 
-    var restaurantsDone = fetch("data/restaurants.json")
-      .then(function (r) { return r.json(); })
-      .then(function (gj) {
-        setLoadProgress(30, "Processing restaurants\u2026");
-        for (var i = 0; i < gj.features.length; i++) {
-          var geom = gj.features[i].geometry;
-          if (!geom || !geom.coordinates) continue;
-          var c = geom.coordinates;
-          restaurantCoords.push(L.latLng(c[1], c[0]));
-        }
-        setLoadProgress(40, "Restaurants ready (" + restaurantCoords.length + ")");
-      });
+    var restaurantsDone = fetchWithProgress("data/restaurants.json", function (pct) {
+      setLoadProgress(5 + Math.round(pct * 85), "Downloading restaurant data\u2026 " + Math.round(pct * 100) + "%");
+    }).then(function (result) {
+      setLoadProgress(92, "Processing restaurants\u2026");
+      var text = new TextDecoder().decode(result.buffer);
+      var gj = JSON.parse(text);
+      for (var i = 0; i < gj.features.length; i++) {
+        var geom = gj.features[i].geometry;
+        if (!geom || !geom.coordinates) continue;
+        var c = geom.coordinates;
+        restaurantCoords.push(L.latLng(c[1], c[0]));
+      }
+      setLoadProgress(95, "Restaurants ready (" + restaurantCoords.length + ")");
+    });
 
     restaurantsDone.then(function () {
-      setLoadProgress(85, "Ready");
       dataReady = true;
       setTimeout(function () {
         redrawCache();
@@ -450,7 +485,7 @@
   }
 
   function hideLoading() {
-    var el = document.getElementById("loading");
+    var el = document.getElementById("loading-overlay");
     if (!el) return;
     el.classList.add("fade-out");
     setTimeout(function () { el.parentNode.removeChild(el); }, 350);
