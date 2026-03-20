@@ -17,14 +17,16 @@
   /* ----------------------------------------------------------------
      Constants
      ---------------------------------------------------------------- */
-  var CHICAGO = [41.8781, -87.6298];
-  var INITIAL_ZOOM = 12;
+  var CHICAGO = [41.8827, -87.6233];   // The Loop
+  var INITIAL_ZOOM = 14;
   var SW_FILL = "#4caf50";
   var SW_ALPHA = 0.65;
   var FT_PER_M = 3.28084;
   var DEG_TO_RAD = Math.PI / 180;
-  var TILE_MIN_ZOOM = 12;
+  var TILE_MIN_ZOOM = 14;
   var TILE_MAX_ZOOM = 16;
+  var TILE_CACHE_LIMIT = 200;
+  var IS_MOBILE = navigator.maxTouchPoints > 0;
 
   /* ----------------------------------------------------------------
      Map
@@ -32,6 +34,7 @@
   var map = L.map("map", {
     center: CHICAGO,
     zoom: INITIAL_ZOOM,
+    minZoom: 14,
     zoomControl: false,
     preferCanvas: true,
   });
@@ -61,141 +64,6 @@
   var tileCache = {};           // "z/x/y" -> { features, extent }
   var pendingTiles = {};        // "z/x/y" -> Promise
   var dataReady = false;
-
-  /* ----------------------------------------------------------------
-     Minimal MVT (Mapbox Vector Tile) decoder
-     Handles protobuf wire format just enough to extract polygon rings.
-     ---------------------------------------------------------------- */
-  function decodeMVT(buf) {
-    var pbf = new Uint8Array(buf);
-    var pos = 0;
-
-    function readVarint() {
-      var result = 0, shift = 0, b;
-      do {
-        b = pbf[pos++];
-        result |= (b & 0x7f) << shift;
-        shift += 7;
-      } while (b >= 0x80);
-      return result >>> 0;
-    }
-
-    function skip(wireType) {
-      if (wireType === 0) readVarint();
-      else if (wireType === 1) pos += 8;
-      else if (wireType === 2) { var n = readVarint(); pos += n; }
-      else if (wireType === 5) pos += 4;
-    }
-
-    function readString(len) {
-      var end = pos + len, s = "";
-      while (pos < end) s += String.fromCharCode(pbf[pos++]);
-      return s;
-    }
-
-    function readPackedVarints(len) {
-      var end = pos + len, arr = [];
-      while (pos < end) arr.push(readVarint());
-      return arr;
-    }
-
-    function zigzag(n) { return (n >>> 1) ^ -(n & 1); }
-
-    function decodeGeometry(cmds) {
-      var rings = [], ring = null, x = 0, y = 0, i = 0;
-      while (i < cmds.length) {
-        var cmd = cmds[i++];
-        var id = cmd & 0x7;
-        var count = cmd >> 3;
-        if (id === 1) {
-          if (ring && ring.length > 0) rings.push(ring);
-          ring = [];
-          for (var j = 0; j < count; j++) {
-            x += zigzag(cmds[i++]);
-            y += zigzag(cmds[i++]);
-            ring.push([x, y]);
-          }
-        } else if (id === 2) {
-          for (var j = 0; j < count; j++) {
-            x += zigzag(cmds[i++]);
-            y += zigzag(cmds[i++]);
-            ring.push([x, y]);
-          }
-        } else if (id === 7) {
-          if (ring && ring.length > 0) {
-            rings.push(ring);
-            ring = null;
-          }
-        }
-      }
-      if (ring && ring.length > 0) rings.push(ring);
-      return rings;
-    }
-
-    var layers = {};
-    var end = pbf.length;
-
-    while (pos < end) {
-      var tag = readVarint();
-      var fieldNum = tag >> 3;
-      var wireType = tag & 0x7;
-
-      if (fieldNum === 3 && wireType === 2) {
-        var layerLen = readVarint();
-        var layerEnd = pos + layerLen;
-        var layerName = "";
-        var features = [];
-        var extent = 4096;
-
-        while (pos < layerEnd) {
-          var lt = readVarint();
-          var lfn = lt >> 3;
-          var lwt = lt & 0x7;
-
-          if (lfn === 1 && lwt === 2) {
-            var nl = readVarint();
-            layerName = readString(nl);
-          } else if (lfn === 2 && lwt === 2) {
-            var fl = readVarint();
-            var fe = pos + fl;
-            var geomType = 0;
-            var geomCmds = [];
-
-            while (pos < fe) {
-              var ft = readVarint();
-              var ffn = ft >> 3;
-              var fwt = ft & 0x7;
-
-              if (ffn === 3 && fwt === 0) {
-                geomType = readVarint();
-              } else if (ffn === 4 && fwt === 2) {
-                var gl = readVarint();
-                geomCmds = readPackedVarints(gl);
-              } else {
-                skip(fwt);
-              }
-            }
-            // type 3 = POLYGON
-            if (geomType === 3 && geomCmds.length) {
-              features.push(decodeGeometry(geomCmds));
-            }
-          } else if (lfn === 5 && lwt === 0) {
-            extent = readVarint();
-          } else {
-            skip(lwt);
-          }
-        }
-
-        if (features.length) {
-          layers[layerName] = { features: features, extent: extent };
-        }
-      } else {
-        skip(wireType);
-      }
-    }
-
-    return layers;
-  }
 
   /* ----------------------------------------------------------------
      Tile coordinate helpers
@@ -246,7 +114,45 @@
   }
 
   /* ----------------------------------------------------------------
-     Fetch + decode a single tile (with cache)
+     Tile decode worker
+     ---------------------------------------------------------------- */
+  var tileWorker = new Worker("js/tile-worker.js");
+  var workerCallbacks = {};
+  var workerIdCounter = 0;
+
+  tileWorker.onmessage = function (e) {
+    var id = e.data.id;
+    var cb = workerCallbacks[id];
+    if (cb) {
+      delete workerCallbacks[id];
+      cb(e.data.layer);
+    }
+  };
+
+  function decodeInWorker(buffer) {
+    return new Promise(function (resolve) {
+      var id = ++workerIdCounter;
+      workerCallbacks[id] = resolve;
+      tileWorker.postMessage({ id: id, buffer: buffer }, [buffer]);
+    });
+  }
+
+  /* ----------------------------------------------------------------
+     Tile cache eviction
+     ---------------------------------------------------------------- */
+  var tileCacheKeys = [];   // insertion-order tracking
+
+  function evictTileCache() {
+    if (tileCacheKeys.length <= TILE_CACHE_LIMIT) return;
+    var evictCount = Math.floor(tileCacheKeys.length / 2);
+    var removed = tileCacheKeys.splice(0, evictCount);
+    for (var i = 0; i < removed.length; i++) {
+      delete tileCache[removed[i]];
+    }
+  }
+
+  /* ----------------------------------------------------------------
+     Fetch + decode a single tile (with cache + worker)
      ---------------------------------------------------------------- */
   function fetchTile(z, x, y) {
     var key = z + "/" + x + "/" + y;
@@ -257,15 +163,21 @@
       delete pendingTiles[key];
       if (!resp || !resp.data) {
         tileCache[key] = null;
+        tileCacheKeys.push(key);
+        evictTileCache();
         return null;
       }
-      var decoded = decodeMVT(resp.data);
-      var layer = decoded["sidewalks"] || null;
-      tileCache[key] = layer;
-      return layer;
+      return decodeInWorker(resp.data).then(function (layer) {
+        tileCache[key] = layer;
+        tileCacheKeys.push(key);
+        evictTileCache();
+        return layer;
+      });
     }).catch(function () {
       delete pendingTiles[key];
       tileCache[key] = null;
+      tileCacheKeys.push(key);
+      evictTileCache();
       return null;
     });
 
@@ -293,7 +205,7 @@
     redrawTimer = setTimeout(function () {
       redrawTimer = null;
       redrawCache();
-    }, 40);
+    }, IS_MOBILE ? 200 : 120);
   }
 
   map.on("moveend",   scheduleRedraw);
@@ -477,16 +389,17 @@
 
     displayCtx.globalCompositeOperation = "destination-out";
     displayCtx.fillStyle = "rgba(0,0,0,1)";
+    displayCtx.beginPath();
 
     var vb = map.getBounds().pad(0.3);
     for (var i = 0; i < restaurantCoords.length; i++) {
       var ll = restaurantCoords[i];
       if (!vb.contains(ll)) continue;
       var pt = map.latLngToContainerPoint(ll);
-      displayCtx.beginPath();
+      displayCtx.moveTo(pt.x + radiusPx, pt.y);
       displayCtx.arc(pt.x, pt.y, radiusPx, 0, Math.PI * 2);
-      displayCtx.fill();
     }
+    displayCtx.fill();
     displayCtx.globalCompositeOperation = "source-over";
 
     computeStats();
@@ -524,19 +437,11 @@
         setLoadProgress(40, "Restaurants ready (" + restaurantCoords.length + ")");
       });
 
-    setLoadProgress(45, "Pre-fetching visible tiles\u2026");
-
-    var z = tileZoom();
-    var coords = getVisibleTileCoords(z);
-    var tilesDone = Promise.all(
-      coords.map(function (c) { return fetchTile(c.z, c.x, c.y); })
-    );
-
-    Promise.all([restaurantsDone, tilesDone]).then(function () {
-      setLoadProgress(85, "Rendering sidewalks\u2026");
+    restaurantsDone.then(function () {
+      setLoadProgress(85, "Ready");
       dataReady = true;
       setTimeout(function () {
-        redrawCacheSync();
+        redrawCache();
         if (showRestaurants) updateRestaurantLayers();
         setLoadProgress(100, "Done");
         hideLoading();
@@ -701,7 +606,12 @@
     if (w <= 0 || h <= 0) return;
 
     var area = w * h;
-    var step = area > 500000 ? 3 : area > 100000 ? 2 : 1;
+    var step;
+    if (IS_MOBILE) {
+      step = area > 500000 ? 5 : area > 100000 ? 4 : 3;
+    } else {
+      step = area > 500000 ? 3 : area > 100000 ? 2 : 1;
+    }
 
     var cacheData = cacheCtx.getImageData(minX, minY, w, h).data;
     var dispData = displayCtx.getImageData(minX, minY, w, h).data;

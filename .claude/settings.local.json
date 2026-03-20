@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -v \"^d.*\\\\.$\")",
+      "Bash(du:*)",
+      "Bash(find /Users/jjustinwilson/Projects/ChicagoStreetCarts -maxdepth 2 -type f -not -path .*/.venv/* -not -path */.git/*)",
+      "Bash(ls:*)",
+      "Bash(find /Users/jjustinwilson/Projects/ChicagoStreetCarts -name *.sh -o -name *pmtiles* -o -name *tippecanoe*)",
+      "Bash(python3 -m json.tool)",
+      "Bash(python3:*)"
+    ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true
+  }
+}
