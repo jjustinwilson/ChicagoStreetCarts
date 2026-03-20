@@ -413,56 +413,65 @@
   var loadDetail = document.getElementById("loading-detail");
 
   function setLoadProgress(pct, msg) {
-    if (loadBar) loadBar.style.width = pct + "%";
+    if (loadBar) {
+      loadBar.classList.remove("indeterminate");
+      loadBar.style.width = pct + "%";
+    }
     if (loadDetail) loadDetail.textContent = msg || "";
   }
 
-  function fetchWithProgress(url, onProgress) {
-    return fetch(url).then(function (response) {
-      var total = parseInt(response.headers.get("content-length"), 10) || 0;
-      if (!total || !response.body) {
-        return response.clone().arrayBuffer().then(function (buf) {
-          onProgress(1);
-          return { response: response, buffer: buf };
-        });
-      }
-      var loaded = 0;
-      var reader = response.body.getReader();
-      var chunks = [];
-      function read() {
-        return reader.read().then(function (result) {
-          if (result.done) {
-            onProgress(1);
-            var combined = new Uint8Array(loaded);
-            var offset = 0;
-            for (var i = 0; i < chunks.length; i++) {
-              combined.set(chunks[i], offset);
-              offset += chunks[i].length;
-            }
-            return { buffer: combined.buffer };
-          }
-          loaded += result.value.length;
-          chunks.push(result.value);
-          onProgress(total ? loaded / total : 0);
-          return read();
-        });
-      }
-      return read();
-    });
+  function setIndeterminate(msg) {
+    if (loadBar) {
+      loadBar.style.width = "";
+      loadBar.classList.add("indeterminate");
+    }
+    if (loadDetail) loadDetail.textContent = msg || "";
   }
 
   function loadData() {
-    setLoadProgress(0, "Initialising\u2026");
+    var loadStart = Date.now();
+    var MIN_DISPLAY_MS = 800;
+
+    setIndeterminate("Initialising\u2026");
 
     tileSource = new pmtiles.PMTiles("data/sidewalks.pmtiles");
 
-    setLoadProgress(5, "Downloading restaurant data\u2026");
+    var restaurantsDone = fetch("data/restaurants.json").then(function (response) {
+      var total = parseInt(response.headers.get("content-length"), 10) || 0;
 
-    var restaurantsDone = fetchWithProgress("data/restaurants.json", function (pct) {
-      setLoadProgress(5 + Math.round(pct * 85), "Downloading restaurant data\u2026 " + Math.round(pct * 100) + "%");
-    }).then(function (result) {
+      // If we can stream with a known size, show real progress
+      if (total && response.body) {
+        setLoadProgress(0, "Downloading restaurant data\u2026 0%");
+        var loaded = 0;
+        var reader = response.body.getReader();
+        var chunks = [];
+        function read() {
+          return reader.read().then(function (result) {
+            if (result.done) {
+              var combined = new Uint8Array(loaded);
+              var offset = 0;
+              for (var i = 0; i < chunks.length; i++) {
+                combined.set(chunks[i], offset);
+                offset += chunks[i].length;
+              }
+              return combined.buffer;
+            }
+            loaded += result.value.length;
+            chunks.push(result.value);
+            var pct = Math.round((loaded / total) * 100);
+            setLoadProgress(pct * 0.9, "Downloading restaurant data\u2026 " + pct + "%");
+            return read();
+          });
+        }
+        return read();
+      }
+
+      // No Content-Length — show indeterminate animation
+      setIndeterminate("Downloading restaurant data\u2026");
+      return response.arrayBuffer();
+    }).then(function (buf) {
       setLoadProgress(92, "Processing restaurants\u2026");
-      var text = new TextDecoder().decode(result.buffer);
+      var text = new TextDecoder().decode(buf);
       var gj = JSON.parse(text);
       for (var i = 0; i < gj.features.length; i++) {
         var geom = gj.features[i].geometry;
@@ -475,12 +484,13 @@
 
     restaurantsDone.then(function () {
       dataReady = true;
-      setTimeout(function () {
-        redrawCache();
-        if (showRestaurants) updateRestaurantLayers();
-        setLoadProgress(100, "Done");
-        hideLoading();
-      }, 20);
+      redrawCache();
+      if (showRestaurants) updateRestaurantLayers();
+      setLoadProgress(100, "Done");
+
+      var elapsed = Date.now() - loadStart;
+      var remaining = Math.max(0, MIN_DISPLAY_MS - elapsed);
+      setTimeout(hideLoading, remaining);
     });
   }
 
