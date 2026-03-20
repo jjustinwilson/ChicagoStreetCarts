@@ -114,27 +114,89 @@
   }
 
   /* ----------------------------------------------------------------
-     Tile decode worker
+     Tile decode worker (with main-thread fallback)
      ---------------------------------------------------------------- */
-  var tileWorker = new Worker("js/tile-worker.js");
+  var tileWorker = null;
   var workerCallbacks = {};
   var workerIdCounter = 0;
 
-  tileWorker.onmessage = function (e) {
-    var id = e.data.id;
-    var cb = workerCallbacks[id];
-    if (cb) {
-      delete workerCallbacks[id];
-      cb(e.data.layer);
+  try {
+    tileWorker = new Worker("js/tile-worker.js");
+    tileWorker.onmessage = function (e) {
+      var id = e.data.id;
+      var cb = workerCallbacks[id];
+      if (cb) {
+        delete workerCallbacks[id];
+        cb(e.data.layer);
+      }
+    };
+    tileWorker.onerror = function () {
+      tileWorker = null;   // fall back to main thread
+    };
+  } catch (ignored) {
+    tileWorker = null;
+  }
+
+  function decodeMVTFallback(buf) {
+    var pbf = new Uint8Array(buf);
+    var pos = 0;
+    function readVarint() {
+      var result = 0, shift = 0, b;
+      do { b = pbf[pos++]; result |= (b & 0x7f) << shift; shift += 7; } while (b >= 0x80);
+      return result >>> 0;
     }
-  };
+    function skip(wt) {
+      if (wt === 0) readVarint();
+      else if (wt === 1) pos += 8;
+      else if (wt === 2) { pos += readVarint(); }
+      else if (wt === 5) pos += 4;
+    }
+    function readString(len) { var e = pos + len, s = ""; while (pos < e) s += String.fromCharCode(pbf[pos++]); return s; }
+    function readPacked(len) { var e = pos + len, a = []; while (pos < e) a.push(readVarint()); return a; }
+    function zigzag(n) { return (n >>> 1) ^ -(n & 1); }
+    function decodeGeom(cmds) {
+      var rings = [], ring = null, x = 0, y = 0, i = 0;
+      while (i < cmds.length) {
+        var c = cmds[i++], id = c & 7, cnt = c >> 3;
+        if (id === 1) { if (ring && ring.length) rings.push(ring); ring = []; for (var j = 0; j < cnt; j++) { x += zigzag(cmds[i++]); y += zigzag(cmds[i++]); ring.push([x, y]); } }
+        else if (id === 2) { for (var j = 0; j < cnt; j++) { x += zigzag(cmds[i++]); y += zigzag(cmds[i++]); ring.push([x, y]); } }
+        else if (id === 7) { if (ring && ring.length) { rings.push(ring); ring = null; } }
+      }
+      if (ring && ring.length) rings.push(ring);
+      return rings;
+    }
+    var layers = {}, end = pbf.length;
+    while (pos < end) {
+      var tag = readVarint(), fn = tag >> 3, wt = tag & 7;
+      if (fn === 3 && wt === 2) {
+        var ll = readVarint(), le = pos + ll, ln = "", feats = [], ext = 4096;
+        while (pos < le) {
+          var lt = readVarint(), lfn = lt >> 3, lwt = lt & 7;
+          if (lfn === 1 && lwt === 2) { var nl = readVarint(); ln = readString(nl); }
+          else if (lfn === 2 && lwt === 2) {
+            var fl = readVarint(), fe = pos + fl, gt = 0, gc = [];
+            while (pos < fe) { var ft = readVarint(), ffn = ft >> 3, fwt = ft & 7; if (ffn === 3 && fwt === 0) gt = readVarint(); else if (ffn === 4 && fwt === 2) { gc = readPacked(readVarint()); } else skip(fwt); }
+            if (gt === 3 && gc.length) feats.push(decodeGeom(gc));
+          } else if (lfn === 5 && lwt === 0) ext = readVarint(); else skip(lwt);
+        }
+        if (feats.length) layers[ln] = { features: feats, extent: ext };
+      } else skip(wt);
+    }
+    return layers;
+  }
 
   function decodeInWorker(buffer) {
-    return new Promise(function (resolve) {
-      var id = ++workerIdCounter;
-      workerCallbacks[id] = resolve;
-      tileWorker.postMessage({ id: id, buffer: buffer }, [buffer]);
-    });
+    if (tileWorker) {
+      return new Promise(function (resolve) {
+        var id = ++workerIdCounter;
+        workerCallbacks[id] = resolve;
+        tileWorker.postMessage({ id: id, buffer: buffer }, [buffer]);
+      });
+    }
+    // Main-thread fallback
+    var decoded = decodeMVTFallback(buffer);
+    var layer = decoded["sidewalks"] || null;
+    return Promise.resolve(layer);
   }
 
   /* ----------------------------------------------------------------
@@ -484,13 +546,23 @@
 
     restaurantsDone.then(function () {
       dataReady = true;
-      redrawCache();
-      if (showRestaurants) updateRestaurantLayers();
-      setLoadProgress(100, "Done");
+      setLoadProgress(96, "Rendering map\u2026");
 
-      var elapsed = Date.now() - loadStart;
-      var remaining = Math.max(0, MIN_DISPLAY_MS - elapsed);
-      setTimeout(hideLoading, remaining);
+      // Yield to let the browser paint the progress bar, then do heavy work
+      requestAnimationFrame(function () {
+        redrawCache();
+        setLoadProgress(98, "Adding restaurants\u2026");
+
+        // Yield again before creating Leaflet markers
+        requestAnimationFrame(function () {
+          if (showRestaurants) updateRestaurantLayers();
+          setLoadProgress(100, "Done");
+
+          var elapsed = Date.now() - loadStart;
+          var remaining = Math.max(0, MIN_DISPLAY_MS - elapsed);
+          setTimeout(hideLoading, remaining);
+        });
+      });
     });
   }
 
@@ -694,22 +766,14 @@
     updateRestaurantLayers();
   });
 
+  var markerBatchTimer = null;
+
   function updateRestaurantLayers() {
     if (showRestaurants && restaurantCoords.length) {
       if (!restaurantPointLayer) {
         restaurantPointLayer = L.layerGroup();
         restaurantBufferLayer = L.layerGroup();
-
-        for (var i = 0; i < restaurantCoords.length; i++) {
-          var ll = restaurantCoords[i];
-          L.circleMarker(ll, {
-            radius: 3,
-            fillColor: "#e65100",
-            color: "#bf360c",
-            weight: 0.5,
-            fillOpacity: 0.8,
-          }).addTo(restaurantPointLayer);
-        }
+        batchAddMarkers(0);
       }
       rebuildBufferCircles();
       restaurantBufferLayer.addTo(map);
@@ -717,6 +781,23 @@
     } else {
       if (restaurantPointLayer) map.removeLayer(restaurantPointLayer);
       if (restaurantBufferLayer) map.removeLayer(restaurantBufferLayer);
+    }
+  }
+
+  function batchAddMarkers(start) {
+    var BATCH = 300;
+    var end = Math.min(start + BATCH, restaurantCoords.length);
+    for (var i = start; i < end; i++) {
+      L.circleMarker(restaurantCoords[i], {
+        radius: 3,
+        fillColor: "#e65100",
+        color: "#bf360c",
+        weight: 0.5,
+        fillOpacity: 0.8,
+      }).addTo(restaurantPointLayer);
+    }
+    if (end < restaurantCoords.length) {
+      markerBatchTimer = setTimeout(function () { batchAddMarkers(end); }, 0);
     }
   }
 
