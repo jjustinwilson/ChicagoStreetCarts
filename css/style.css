@@ -100,6 +100,31 @@ body, html {
 #info-panel p {
   font-size: 12.5px; line-height: 1.45;
   color: #444;
+  margin-bottom: 0.65em;
+}
+#info-panel p:last-child { margin-bottom: 0; }
+#info-panel .info-panel-subhead {
+  font-size: 12px;
+  font-weight: 700;
+  margin: 10px 0 4px;
+  color: #333;
+}
+#info-panel .info-panel-disclaimer {
+  font-size: 12px;
+  line-height: 1.4;
+  color: #555;
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: 6px;
+  border-left: 3px solid #999;
+}
+#info-panel .info-panel-attribution {
+  font-size: 11.5px;
+  color: #666;
+  margin-top: 8px;
+}
+#info-panel .info-panel-attribution a {
+  color: #1565c0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -290,8 +315,12 @@ body, html {
 /*  Responsive                                                         */
 /* ------------------------------------------------------------------ */
 @media (max-width: 640px) {
-  #info-panel { max-width: 200px; }
-  #info-panel p { display: none; }
+  #info-panel {
+    max-width: min(310px, calc(100vw - 24px));
+    max-height: min(42vh, 320px);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
   #stats-panel { top: auto; bottom: 100px; right: 8px; width: 220px; }
   #slider-panel { width: calc(100vw - 16px); }
   #neighborhood-panel { top: 8px; right: 8px; }
