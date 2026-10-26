@@ -45,7 +45,9 @@
   var CARTO_API_KEY = (window.APP_CONFIG && window.APP_CONFIG.CARTO_API_KEY) || "";
   var basemapUrl = "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png";
   if (CARTO_API_KEY) {
-    basemapUrl += "?api_key=" + encodeURIComponent(CARTO_API_KEY);
+    // Keyed URL format per https://carto.com/basemaps/apikey/
+    basemapUrl = "https://basemaps.cartocdn.com/rastertiles/light_all/{z}/{x}/{y}{r}.png" +
+      "?key=" + encodeURIComponent(CARTO_API_KEY);
   }
 
   L.tileLayer(
