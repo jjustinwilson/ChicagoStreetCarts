@@ -23,6 +23,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+      - name: Write js/config.js from secrets
+        env:
+          CARTO_API_KEY: ${{ secrets.CARTO_API_KEY }}
+        run: |
+          printf 'window.APP_CONFIG = { CARTO_API_KEY: %s };\n' \
+            "$(jq -Rn --arg k "$CARTO_API_KEY" '$k')" > js/config.js
       - uses: actions/upload-pages-artifact@v3
         with:
           path: .

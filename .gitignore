@@ -24,3 +24,6 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
+
+# Local config with API keys (generated at deploy time)
+js/config.js

@@ -40,8 +40,16 @@
   });
   L.control.zoom({ position: "bottomright" }).addTo(map);
 
+  // CARTO key comes from js/config.js (gitignored, written at deploy time
+  // from the CARTO_API_KEY repo secret). Falls back to keyless tiles.
+  var CARTO_API_KEY = (window.APP_CONFIG && window.APP_CONFIG.CARTO_API_KEY) || "";
+  var basemapUrl = "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png";
+  if (CARTO_API_KEY) {
+    basemapUrl += "?api_key=" + encodeURIComponent(CARTO_API_KEY);
+  }
+
   L.tileLayer(
-    "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+    basemapUrl,
     {
       attribution:
         '&copy; <a href="https://carto.com/">CARTO</a> &copy; ' +
